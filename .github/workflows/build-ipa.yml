@@ -1,0 +1,81 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The FEXCore with the hosted-JIT hooks (husk-fex) lives on Fathom's husk-fex branch.
+      - name: Checkout husk-fex
+        uses: actions/checkout@v4
+        with:
+          repository: Leviidev/Fathom
+          ref: husk-fex
+          path: husk-fex
+          sparse-checkout: runtime/sources/fexcore-darwin
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Install tools
+        run: brew install xcodegen ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-ios-${{ github.sha }}
+          restore-keys: ccache-ios-
+
+      - name: Build
+        env:
+          HUSK_FEX_DIR: ${{ github.workspace }}/husk-fex
+          FEXCORE_SRC: ${{ github.workspace }}/husk-fex/runtime/sources/fexcore-darwin
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 2G
+          DD: ${{ github.workspace }}/build/dd
+        run: |
+          mkdir -p out
+          scripts/package_ipa.sh "$PWD/out/Utsuro.ipa"
+          scripts/package_ipa.sh --tipa "$PWD/out/Utsuro.tipa"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-ios-${{ github.sha }}-${{ github.run_attempt }}
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Utsuro-ipa
+          path: |
+            out/Utsuro.ipa
+            out/Utsuro.tipa
+          if-no-files-found: error
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/dd/*.log
+          if-no-files-found: ignore
